@@ -89,7 +89,15 @@ function createPlayer() {
         atkSpeed: 1,
         atkCounter: 0,
         AimAngle: 0,
-        pressing: { up: false, down: false, left: false, right: false }
+        pressing: { up: false, down: false, left: false, right: false },
+
+        // NEW FEATURE: ability system
+        abilities: [],
+        specialCooldownModifier: 1,
+        doubleShoot: false,
+        doubleDamage: false,
+        burstSpawn: false,
+        wideSpread: false,
     };
 }
 
@@ -118,7 +126,19 @@ function spawnEnemy() {
 
 function spawnUpgrade() {
     const id = Math.random();
-    const isAtk = Math.random() < 0.5;
+
+    // 1/3 chance each type
+    const r = Math.random();
+    let category;
+    let color;
+
+    if (r < 0.33) {
+        category = "low";         color = "khaki";
+    } else if (r < 0.66) {
+        category = "atkSpeed";    color = "blueviolet";
+    } else {
+        category = "ability";     color = "deepskyblue"; // NEW TYPE
+    }
 
     upgrades[id] = {
         type: "upgrade",
@@ -129,9 +149,47 @@ function spawnUpgrade() {
         height: 13,
         xs: 0,
         ys: 0,
-        category: isAtk ? "atkSpeed" : "low",
-        color: isAtk ? "blueviolet" : "khaki"
+        category,
+        color
     };
+}
+
+// ==========================================================
+// ABILITIES
+// ==========================================================
+
+const ABILITY_POOL = [
+    "DoubleShoot",
+    "DoubleDamage",
+    "BurstSpawn",
+    "SpecialMod",
+    "WideSpread",
+];
+
+function applyAbility(name) {
+    player.abilities.push(name);
+
+    switch(name) {
+        case "DoubleShoot":
+            player.doubleShoot = true;
+            break;
+
+        case "DoubleDamage":
+            player.doubleDamage = true;
+            break;
+
+        case "BurstSpawn":
+            player.burstSpawn = true;
+            break;
+
+        case "SpecialMod":
+            player.specialCooldownModifier = 0.5;
+            break;
+
+        case "WideSpread":
+            player.wideSpread = true;
+            break;
+    }
 }
 
 // ==========================================================
@@ -151,9 +209,18 @@ function spawnBullet(origin, angleOverride) {
         height: 5,
         timer: 0,
         color: "black",
+        damage: player.doubleDamage ? 8 : 4, // normal = 4
+
         xs: Math.cos(angle * Math.PI / 180) * 15,
         ys: Math.sin(angle * Math.PI / 180) * 15
     };
+}
+
+// spawn mini-bullets for BurstSpawn
+function spawnMiniBullets(base) {
+    for (let a = 0; a < 360; a += 120) {
+        spawnBullet({ x: base.x, y: base.y, AimAngle: a }, a);
+    }
 }
 
 // ==========================================================
@@ -198,14 +265,25 @@ document.onclick = () => {
     if (player.atkCounter > 50) {
         shoot.play();
         player.atkCounter -= 25;
-        spawnBullet(player);
+
+        if (player.wideSpread) {
+            spawnBullet(player, player.AimAngle - 10);
+            spawnBullet(player, player.AimAngle);
+            spawnBullet(player, player.AimAngle + 10);
+        } else if (player.doubleShoot) {
+            spawnBullet(player, player.AimAngle - 5);
+            spawnBullet(player, player.AimAngle + 5);
+        } else {
+            spawnBullet(player);
+        }
     }
 };
 
 document.oncontextmenu = e => {
     e.preventDefault();
+    const req = 500 * player.specialCooldownModifier;
 
-    if (player.atkCounter > 500) {
+    if (player.atkCounter > req) {
         supershoot.play();
         for (let a = 0; a < 360; a += 9) spawnBullet(player, a);
         player.atkCounter = 0;
@@ -247,17 +325,16 @@ function update() {
     score++;
     player.atkCounter += player.atkSpeed;
 
-    // player color feedback
+    // color feedback
     if (player.atkCounter >= 520) player.color = "Yellow";
     else if (player.atkCounter >= 250) player.color = "LawnGreen";
     else if (player.atkCounter >= 50) player.color = "Lime";
     else player.color = "LightGreen";
 
-    // spawn logic
     if (frameCount % 80 === 0) spawnEnemy();
     if (frameCount % 75 === 0) spawnUpgrade();
 
-    // update enemies
+    // enemies
     for (const id in enemies) {
         const e = enemies[id];
         move(e);
@@ -269,7 +346,7 @@ function update() {
         }
     }
 
-    // update upgrades
+    // upgrades
     for (const id in upgrades) {
         const u = upgrades[id];
         move(u);
@@ -282,12 +359,16 @@ function update() {
             } else if (u.category === "atkSpeed") {
                 player.atkSpeed++;
                 powerup.play();
+            } else if (u.category === "ability") {
+                powerup.play();
+                const ab = ABILITY_POOL[Math.floor(Math.random() * ABILITY_POOL.length)];
+                applyAbility(ab);
             }
             delete upgrades[id];
         }
     }
 
-    // update bullets
+    // bullets
     for (const id in bullets) {
         const b = bullets[id];
         b.timer++;
@@ -308,8 +389,10 @@ function update() {
                 delete bullets[id];
                 hit.play();
 
-                e.width -= 4;
-                e.height -= 4;
+                e.width -= b.damage;
+                e.height -= b.damage;
+
+                if (player.burstSpawn) spawnMiniBullets(b);
 
                 if (e.width <= 12 || e.height <= 12) delete enemies[eid];
                 break;
@@ -317,7 +400,6 @@ function update() {
         }
     }
 
-    // player dead
     if (player.hp <= 0) {
         const t = (Date.now() - timeWhenStarted) / 1000;
         alert("GAME OVER - Survived " + t + "s - Score = " + score);
@@ -328,9 +410,16 @@ function update() {
     move(player);
     draw(player);
 
+    // HUD
     ctx.fillStyle = "white";
     ctx.fillText(player.hp + " HP", 12, 25);
     ctx.fillText("Score: " + score, 200, 25);
+
+    // abilities list
+    ctx.fillText("Abilities:", 12, 50);
+    player.abilities.forEach((ab, i) => {
+        ctx.fillText("- " + ab, 12, 70 + i * 20);
+    });
 }
 
 function startGame() {
